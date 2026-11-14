@@ -108,6 +108,42 @@ const uploadFileToDrive = async (fileBuffer, mimeType, fileName, folderId) => {
   return response.data.id; // Internal file ID only — never exposed to clients
 };
 
+// Create a Google Drive resumable upload session. The media bytes are uploaded
+// by the browser directly to Drive, so large files never pass through Render.
+const createResumableUploadSession = async (fileName, mimeType, fileSize, folderId) => {
+  if (!folderId) throw new Error('GOOGLE_DRIVE_FOLDER_ID is not configured');
+
+  const auth = getAuthenticatedClient();
+  const { token } = await auth.getAccessToken();
+  if (!token) throw new Error('Unable to get a Google Drive access token');
+
+  const response = await fetch(
+    'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable',
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json; charset=UTF-8',
+        'X-Upload-Content-Type': mimeType,
+        'X-Upload-Content-Length': String(fileSize),
+      },
+      body: JSON.stringify({ name: fileName, mimeType, parents: [folderId] }),
+    }
+  );
+
+  if (!response.ok) {
+    const details = await response.text().catch(() => '');
+    throw new Error(`Google Drive could not start the upload (${response.status}): ${details.slice(0, 300)}`);
+  }
+
+  const sessionUrl = response.headers.get('location');
+  if (!sessionUrl || !sessionUrl.startsWith('https://www.googleapis.com/upload/drive/v3/files?')) {
+    throw new Error('Google Drive returned an invalid upload session URL');
+  }
+
+  return sessionUrl;
+};
+
 // ── Get a readable stream for a Drive file (for proxying) ─────────────────
 const getFileStream = async (fileId, rangeHeader = null) => {
   const drive = getDriveClient();
@@ -174,6 +210,7 @@ module.exports = {
   exchangeCodeForTokens,
   isAuthorized,
   uploadFileToDrive,
+  createResumableUploadSession,
   getFileStream,
   deleteFileFromDrive,
   uploadThumbnailToDrive,

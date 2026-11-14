@@ -39,6 +39,7 @@ const mediaFileMatchesType = (type, mimeType) => (
 // ── @route   POST /api/poetry
 // ── @access  Admin
 const createPoetry = async (req, res) => {
+  let uploadedDriveFileId = null;
   try {
     const { title, description, content, type, language, tags, isFeatured, isPublished, duration } = req.body;
 
@@ -58,8 +59,15 @@ const createPoetry = async (req, res) => {
 
     // ── Upload main media file (audio / video) ───────────────────────────
     const mediaFile = req.files?.media?.[0];
-    if (type !== 'text' && !mediaFile) {
+    const requestedDriveFileId = req.body.driveFileId;
+    if (type !== 'text' && !mediaFile && !requestedDriveFileId) {
       return res.status(400).json({ success: false, message: `A ${type} file is required` });
+    }
+    if (mediaFile && requestedDriveFileId) {
+      return res.status(400).json({ success: false, message: 'Send either a media file or a completed Drive upload, not both' });
+    }
+    if (requestedDriveFileId && !/^[a-zA-Z0-9_-]{10,200}$/.test(requestedDriveFileId)) {
+      return res.status(400).json({ success: false, message: 'Invalid completed media upload' });
     }
     if (mediaFile && type !== 'text' && !mediaFileMatchesType(type, mediaFile.mimetype)) {
       return res.status(400).json({
@@ -74,6 +82,10 @@ const createPoetry = async (req, res) => {
         safeFilename(mediaFile.originalname),
         DRIVE_FOLDER_ID
       );
+      uploadedDriveFileId = driveFileId;
+    } else if (type !== 'text') {
+      driveFileId = requestedDriveFileId;
+      uploadedDriveFileId = driveFileId;
     }
 
     // ── Upload thumbnail ─────────────────────────────────────────────────
@@ -122,6 +134,11 @@ const createPoetry = async (req, res) => {
     });
   } catch (error) {
     console.error('createPoetry error:', error);
+    if (uploadedDriveFileId) {
+      deleteFileFromDrive(uploadedDriveFileId).catch((cleanupError) => {
+        console.warn('Could not clean up an unlinked Drive upload:', cleanupError.message);
+      });
+    }
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -338,6 +355,7 @@ const streamFile = async (req, res) => {
 // ── @route   PATCH /api/poetry/:id
 // ── @access  Admin
 const updatePoetry = async (req, res) => {
+  let uploadedDriveFileId = null;
   try {
     const poetry = await Poetry.findById(req.params.id)
       .select('+driveFileId +driveThumbnailFileId');
@@ -388,14 +406,21 @@ const updatePoetry = async (req, res) => {
     let newThumbnailId = null;
 
     const mediaFile = req.files?.media?.[0];
+    const requestedDriveFileId = req.body.driveFileId;
     const nextType = updates.type || poetry.type;
-    if (nextType !== 'text' && nextType !== poetry.type && !mediaFile) {
+    if (mediaFile && requestedDriveFileId) {
+      return res.status(400).json({ success: false, message: 'Send either a media file or a completed Drive upload, not both' });
+    }
+    if (requestedDriveFileId && !/^[a-zA-Z0-9_-]{10,200}$/.test(requestedDriveFileId)) {
+      return res.status(400).json({ success: false, message: 'Invalid completed media upload' });
+    }
+    if (nextType !== 'text' && nextType !== poetry.type && !mediaFile && !requestedDriveFileId) {
       return res.status(400).json({
         success: false,
         message: 'Upload a new media file when changing the entry type.',
       });
     }
-    if (nextType !== 'text' && !mediaFile && !poetry.driveFileId) {
+    if (nextType !== 'text' && !mediaFile && !requestedDriveFileId && !poetry.driveFileId) {
       return res.status(400).json({
         success: false,
         message: 'An audio or video entry needs a media file.',
@@ -415,6 +440,11 @@ const updatePoetry = async (req, res) => {
         DRIVE_FOLDER_ID
       );
       updates.driveFileId = newMediaId;
+      uploadedDriveFileId = newMediaId;
+    } else if (nextType !== 'text' && requestedDriveFileId) {
+      newMediaId = requestedDriveFileId;
+      updates.driveFileId = newMediaId;
+      uploadedDriveFileId = newMediaId;
     } else if (nextType === 'text') {
       updates.driveFileId = null;
     }
@@ -459,6 +489,11 @@ const updatePoetry = async (req, res) => {
     res.json({ success: true, message: 'Poetry updated', data: updatedPoetry });
   } catch (error) {
     console.error('updatePoetry error:', error);
+    if (uploadedDriveFileId) {
+      deleteFileFromDrive(uploadedDriveFileId).catch((cleanupError) => {
+        console.warn('Could not clean up an unlinked Drive upload:', cleanupError.message);
+      });
+    }
     res.status(500).json({ success: false, message: error.message });
   }
 };

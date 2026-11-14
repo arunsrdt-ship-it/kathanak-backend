@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const adminAuth = require('../middleware/adminAuth');
 const { uploadPoetryFiles, validateFileSizes } = require('../middleware/upload');
+const { createMediaUploadSession } = require('../controllers/mediaUploadController');
 const {
   createPoetry,
   getAdminPoetrys,
@@ -17,6 +18,7 @@ const {
 // ── Public routes ─────────────────────────────────────────────────────────
 router.get('/admin', adminAuth, getAdminPoetrys);
 router.get('/admin/:id', adminAuth, getAdminPoetryById);
+router.post('/upload-session', adminAuth, createMediaUploadSession);
 router.get('/', getAllPoetrys);
 router.get('/:idOrSlug', getPoetryById);
 router.post('/:id/like', likePoetry);
