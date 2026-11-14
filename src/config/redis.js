@@ -35,4 +35,54 @@ const getCacheKey = (key) => {
   return `db:${host}:${database}:${key}`;
 };
 
-module.exports = { getRedis, getCacheKey };
+// Redis is only an optimization. Cache outages must never prevent MongoDB
+// reads or writes from serving the API.
+const getCached = async (key) => {
+  try {
+    const redis = getRedis();
+    return redis ? await redis.get(key) : null;
+  } catch (err) {
+    console.warn('Redis cache read failed; falling back to MongoDB:', err.message);
+    return null;
+  }
+};
+
+const setCached = async (key, value, ttlSeconds) => {
+  try {
+    const redis = getRedis();
+    if (!redis) return;
+    if (ttlSeconds) await redis.setex(key, ttlSeconds, value);
+    else await redis.set(key, value);
+  } catch (err) {
+    console.warn('Redis cache write failed:', err.message);
+  }
+};
+
+const deleteCached = async (...keys) => {
+  try {
+    const redis = getRedis();
+    if (redis && keys.length) await redis.del(...keys);
+  } catch (err) {
+    console.warn('Redis cache invalidation failed:', err.message);
+  }
+};
+
+const deleteCachedPattern = async (pattern) => {
+  try {
+    const redis = getRedis();
+    if (!redis) return;
+    const keys = await redis.keys(pattern);
+    if (keys.length) await redis.del(...keys);
+  } catch (err) {
+    console.warn('Redis cache invalidation failed:', err.message);
+  }
+};
+
+module.exports = {
+  getRedis,
+  getCacheKey,
+  getCached,
+  setCached,
+  deleteCached,
+  deleteCachedPattern,
+};
