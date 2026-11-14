@@ -17,7 +17,7 @@ const {
 const generateListCacheKey = (query) => {
   return getCacheKey(`poetry:list:${JSON.stringify(query)}`);
 };
-const { ALLOWED_AUDIO_TYPES } = require('../middleware/upload');
+const { ALLOWED_AUDIO_TYPES, ALLOWED_VIDEO_TYPES } = require('../middleware/upload');
 const { v4: uuidv4 } = require('uuid');
 
 const DRIVE_FOLDER_ID = process.env.GOOGLE_DRIVE_FOLDER_ID;
@@ -28,6 +28,12 @@ const safeFilename = (originalName) => {
   const ext = originalName.split('.').pop();
   return `${uuidv4()}.${ext}`;
 };
+
+const mediaFileMatchesType = (type, mimeType) => (
+  type === 'audio'
+    ? ALLOWED_AUDIO_TYPES.includes(mimeType)
+    : type === 'video' && ALLOWED_VIDEO_TYPES.includes(mimeType)
+);
 
 // ── @desc    Create a new poetry ──────────────────────────────────────────
 // ── @route   POST /api/poetry
@@ -54,6 +60,12 @@ const createPoetry = async (req, res) => {
     const mediaFile = req.files?.media?.[0];
     if (type !== 'text' && !mediaFile) {
       return res.status(400).json({ success: false, message: `A ${type} file is required` });
+    }
+    if (mediaFile && type !== 'text' && !mediaFileMatchesType(type, mediaFile.mimetype)) {
+      return res.status(400).json({
+        success: false,
+        message: `The uploaded file is not a supported ${type} format.`,
+      });
     }
     if (mediaFile && type !== 'text') {
       driveFileId = await uploadFileToDrive(
@@ -387,6 +399,12 @@ const updatePoetry = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'An audio or video entry needs a media file.',
+      });
+    }
+    if (mediaFile && nextType !== 'text' && !mediaFileMatchesType(nextType, mediaFile.mimetype)) {
+      return res.status(400).json({
+        success: false,
+        message: `The uploaded file is not a supported ${nextType} format.`,
       });
     }
     if (mediaFile && nextType !== 'text') {
