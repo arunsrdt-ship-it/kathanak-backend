@@ -1,5 +1,5 @@
 const SiteConfig = require('../models/SiteConfig');
-const { getRedis } = require('../config/redis');
+const { getRedis, getCacheKey } = require('../config/redis');
 
 // ── @desc  Get site config ────────────────────────────────────────────────
 // ── @route GET /api/config
@@ -8,7 +8,7 @@ const getConfig = async (req, res) => {
   try {
     const redis = getRedis();
     if (redis) {
-      const cached = await redis.get('site:config');
+      const cached = await redis.get(getCacheKey('site:config'));
       if (cached) return res.json({ success: true, data: cached });
     }
 
@@ -17,7 +17,7 @@ const getConfig = async (req, res) => {
       config = await SiteConfig.create({ key: 'main' }); // create with defaults
     }
 
-    if (redis) await redis.set('site:config', config);
+    if (redis) await redis.set(getCacheKey('site:config'), config);
 
     res.json({ success: true, data: config });
   } catch (err) {
@@ -44,7 +44,7 @@ const updateConfig = async (req, res) => {
     );
 
     const redis = getRedis();
-    if (redis) await redis.del('site:config'); // Invalidate cache
+    if (redis) await redis.del(getCacheKey('site:config')); // Invalidate cache
 
     res.json({ success: true, data: config });
   } catch (err) {

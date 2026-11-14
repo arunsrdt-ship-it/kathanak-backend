@@ -5,11 +5,11 @@ const {
   getFileStream,
   deleteFileFromDrive,
 } = require('../config/googleDrive');
-const { getRedis } = require('../config/redis');
+const { getRedis, getCacheKey } = require('../config/redis');
 
 // Helper to generate a consistent cache key for poetry lists
 const generateListCacheKey = (query) => {
-  return `poetry:list:${JSON.stringify(query)}`;
+  return getCacheKey(`poetry:list:${JSON.stringify(query)}`);
 };
 const { ALLOWED_AUDIO_TYPES } = require('../middleware/upload');
 const { v4: uuidv4 } = require('uuid');
@@ -86,7 +86,7 @@ const createPoetry = async (req, res) => {
     // Invalidate caches
     const redis = getRedis();
     if (redis) {
-      const keys = await redis.keys('poetry:list:*');
+      const keys = await redis.keys(getCacheKey('poetry:list:*'));
       if (keys.length > 0) await redis.del(...keys);
     }
 
@@ -185,7 +185,7 @@ const getPoetryById = async (req, res) => {
     const isObjectId = /^[a-f\d]{24}$/i.test(idOrSlug);
 
     const redis = getRedis();
-    const cacheKey = `poetry:detail:${idOrSlug}`;
+    const cacheKey = getCacheKey(`poetry:detail:${idOrSlug}`);
 
     if (redis) {
       const cached = await redis.get(cacheKey);
@@ -312,8 +312,11 @@ const updatePoetry = async (req, res) => {
     // Invalidate caches
     const redis = getRedis();
     if (redis) {
-      await redis.del(`poetry:detail:${poetry._id}`, `poetry:detail:${poetry.slug}`);
-      const listKeys = await redis.keys('poetry:list:*');
+      await redis.del(
+        getCacheKey(`poetry:detail:${poetry._id}`),
+        getCacheKey(`poetry:detail:${poetry.slug}`)
+      );
+      const listKeys = await redis.keys(getCacheKey('poetry:list:*'));
       if (listKeys.length > 0) await redis.del(...listKeys);
     }
 
@@ -352,8 +355,11 @@ const deletePoetry = async (req, res) => {
     // Invalidate caches
     const redis = getRedis();
     if (redis) {
-      await redis.del(`poetry:detail:${poetry._id}`, `poetry:detail:${poetry.slug}`);
-      const listKeys = await redis.keys('poetry:list:*');
+      await redis.del(
+        getCacheKey(`poetry:detail:${poetry._id}`),
+        getCacheKey(`poetry:detail:${poetry.slug}`)
+      );
+      const listKeys = await redis.keys(getCacheKey('poetry:list:*'));
       if (listKeys.length > 0) await redis.del(...listKeys);
     }
 
@@ -382,7 +388,10 @@ const likePoetry = async (req, res) => {
     // Invalidate detail cache, but maybe leave list caches alone to avoid thrashing just for likes
     const redis = getRedis();
     if (redis) {
-      await redis.del(`poetry:detail:${poetry._id}`, `poetry:detail:${poetry.slug}`);
+      await redis.del(
+        getCacheKey(`poetry:detail:${poetry._id}`),
+        getCacheKey(`poetry:detail:${poetry.slug}`)
+      );
     }
 
     res.json({ success: true, data: { likes: poetry.likes } });

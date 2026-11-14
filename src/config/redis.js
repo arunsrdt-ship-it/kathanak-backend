@@ -1,4 +1,5 @@
 const { Redis } = require('@upstash/redis');
+const mongoose = require('mongoose');
 
 let redisClient = null;
 
@@ -26,4 +27,12 @@ const getRedis = () => {
   return redisClient;
 };
 
-module.exports = { getRedis };
+// Isolate cached values by the connected MongoDB host and database. This
+// prevents a database switch from serving records cached for the old database.
+const getCacheKey = (key) => {
+  const host = mongoose.connection.host || 'disconnected';
+  const database = mongoose.connection.name || 'default';
+  return `db:${host}:${database}:${key}`;
+};
+
+module.exports = { getRedis, getCacheKey };
