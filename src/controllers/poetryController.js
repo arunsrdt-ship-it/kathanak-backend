@@ -21,6 +21,7 @@ const { ALLOWED_AUDIO_TYPES } = require('../middleware/upload');
 const { v4: uuidv4 } = require('uuid');
 
 const DRIVE_FOLDER_ID = process.env.GOOGLE_DRIVE_FOLDER_ID;
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 const safeFilename = (originalName) => {
@@ -33,10 +34,16 @@ const safeFilename = (originalName) => {
 // ── @access  Admin
 const createPoetry = async (req, res) => {
   try {
-    const { title, description, content, type, language, tags, isFeatured, duration } = req.body;
+    const { title, description, content, type, language, tags, isFeatured, isPublished, duration } = req.body;
 
     if (!title || !type) {
       return res.status(400).json({ success: false, message: 'Title and type are required' });
+    }
+    if (type === 'text' && !content?.trim()) {
+      return res.status(400).json({ success: false, message: 'Poem text is required for written entries' });
+    }
+    if (!['text', 'audio', 'video'].includes(type)) {
+      return res.status(400).json({ success: false, message: 'Type must be text, audio, or video' });
     }
 
     let driveFileId = null;
@@ -45,6 +52,9 @@ const createPoetry = async (req, res) => {
 
     // ── Upload main media file (audio / video) ───────────────────────────
     const mediaFile = req.files?.media?.[0];
+    if (type !== 'text' && !mediaFile) {
+      return res.status(400).json({ success: false, message: `A ${type} file is required` });
+    }
     if (mediaFile && type !== 'text') {
       driveFileId = await uploadFileToDrive(
         mediaFile.buffer,
@@ -82,10 +92,10 @@ const createPoetry = async (req, res) => {
       language: language || 'hindi',
       tags: parsedTags,
       isFeatured: isFeatured === 'true' || isFeatured === true,
-      isPublished: true,
+      isPublished: isPublished === undefined ? true : isPublished === 'true' || isPublished === true,
       driveFileId,         // stored in DB, never returned in public responses
       driveThumbnailFileId,
-      thumbnailUrl,        // safe to expose (public thumbnail)
+      thumbnailUrl: thumbnailUrl || req.body.thumbnailUrl || null, // safe to expose (public thumbnail)
       duration: duration ? Number(duration) : null,
     });
 
@@ -100,6 +110,57 @@ const createPoetry = async (req, res) => {
     });
   } catch (error) {
     console.error('createPoetry error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Admin list includes drafts, unlike the public archive endpoint.
+const getAdminPoetrys = async (req, res) => {
+  try {
+    const { page = 1, limit = 100, search, type } = req.query;
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 100));
+    const filter = {};
+
+    if (type) filter.type = type;
+    if (search) {
+      filter.$or = [
+        { title: { $regex: escapeRegex(search), $options: 'i' } },
+        { description: { $regex: escapeRegex(search), $options: 'i' } },
+        { type: { $regex: escapeRegex(search), $options: 'i' } },
+      ];
+    }
+
+    const [poetries, total] = await Promise.all([
+      Poetry.find(filter)
+        .sort({ createdAt: -1 })
+        .skip((pageNum - 1) * limitNum)
+        .limit(limitNum)
+        .select('-driveFileId -driveThumbnailFileId'),
+      Poetry.countDocuments(filter),
+    ]);
+
+    res.json({
+      success: true,
+      data: poetries,
+      pagination: { total, page: pageNum, limit: limitNum, pages: Math.ceil(total / limitNum) },
+    });
+  } catch (error) {
+    console.error('getAdminPoetrys error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const getAdminPoetryById = async (req, res) => {
+  try {
+    const poetry = await Poetry.findById(req.params.id)
+      .select('-driveFileId -driveThumbnailFileId');
+    if (!poetry) {
+      return res.status(404).json({ success: false, message: 'Poetry not found' });
+    }
+    res.json({ success: true, data: poetry });
+  } catch (error) {
+    console.error('getAdminPoetryById error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -132,9 +193,9 @@ const getAllPoetrys = async (req, res) => {
     if (featured === 'true') filter.isFeatured = true;
     if (search) {
       filter.$or = [
-        { title: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } },
-        { tags: { $in: [new RegExp(search, 'i')] } },
+        { title: { $regex: escapeRegex(search), $options: 'i' } },
+        { description: { $regex: escapeRegex(search), $options: 'i' } },
+        { tags: { $in: [new RegExp(escapeRegex(search), 'i')] } },
       ];
     }
 
@@ -266,47 +327,118 @@ const streamFile = async (req, res) => {
 // ── @access  Admin
 const updatePoetry = async (req, res) => {
   try {
-    const allowed = ['title', 'description', 'content', 'language', 'tags', 'isFeatured', 'isPublished', 'duration'];
+    const poetry = await Poetry.findById(req.params.id)
+      .select('+driveFileId +driveThumbnailFileId');
+    if (!poetry) {
+      return res.status(404).json({ success: false, message: 'Poetry not found' });
+    }
+
+    const allowed = [
+      'title', 'description', 'content', 'type', 'language',
+      'isFeatured', 'isPublished', 'duration', 'thumbnailUrl',
+    ];
     const updates = {};
     allowed.forEach((field) => {
       if (req.body[field] !== undefined) updates[field] = req.body[field];
     });
+    if (req.body.tags !== undefined) {
+      updates.tags = typeof req.body.tags === 'string'
+        ? JSON.parse(req.body.tags)
+        : req.body.tags;
+    }
+    for (const field of ['isFeatured', 'isPublished']) {
+      if (updates[field] !== undefined) {
+        updates[field] = updates[field] === true || updates[field] === 'true';
+      }
+    }
+    if (updates.duration !== undefined) {
+      updates.duration = updates.duration === '' ? null : Number(updates.duration);
+    }
 
-    // Handle new thumbnail upload
+    if (updates.title && updates.title.trim() !== poetry.title) {
+      const baseSlug = updates.title.toLowerCase()
+        .replace(/[^a-z0-9\s-]/g, '')
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-')
+        .trim() || `poem-${uuidv4().slice(0, 8)}`;
+      let slug = baseSlug;
+      let suffix = 1;
+      while (await Poetry.exists({ slug, _id: { $ne: poetry._id } })) {
+        slug = `${baseSlug}-${suffix++}`;
+      }
+      updates.slug = slug;
+    }
+
+    const oldMediaId = poetry.driveFileId;
+    const oldThumbnailId = poetry.driveThumbnailFileId;
+    const oldSlug = poetry.slug;
+    let newMediaId = null;
+    let newThumbnailId = null;
+
+    const mediaFile = req.files?.media?.[0];
+    const nextType = updates.type || poetry.type;
+    if (nextType !== 'text' && nextType !== poetry.type && !mediaFile) {
+      return res.status(400).json({
+        success: false,
+        message: 'Upload a new media file when changing the entry type.',
+      });
+    }
+    if (nextType !== 'text' && !mediaFile && !poetry.driveFileId) {
+      return res.status(400).json({
+        success: false,
+        message: 'An audio or video entry needs a media file.',
+      });
+    }
+    if (mediaFile && nextType !== 'text') {
+      newMediaId = await uploadFileToDrive(
+        mediaFile.buffer,
+        mediaFile.mimetype,
+        safeFilename(mediaFile.originalname),
+        DRIVE_FOLDER_ID
+      );
+      updates.driveFileId = newMediaId;
+    } else if (nextType === 'text') {
+      updates.driveFileId = null;
+    }
+
     const thumbnailFile = req.files?.thumbnail?.[0];
     if (thumbnailFile) {
-      const poetry = await Poetry.findById(req.params.id).select('+driveThumbnailFileId');
-      if (poetry?.driveThumbnailFileId) {
-        await deleteFileFromDrive(poetry.driveThumbnailFileId).catch(() => {});
-      }
       const result = await uploadThumbnailToDrive(
         thumbnailFile.buffer,
         thumbnailFile.mimetype,
         safeFilename(thumbnailFile.originalname),
         DRIVE_FOLDER_ID
       );
+      newThumbnailId = result.fileId;
       updates.driveThumbnailFileId = result.fileId;
       updates.thumbnailUrl = result.publicUrl;
     }
 
-    const poetry = await Poetry.findByIdAndUpdate(
-      req.params.id,
-      updates,
-      { new: true, runValidators: true }
+    if (nextType === 'text') updates.content = req.body.content ?? poetry.content;
+    const updatedPoetry = await Poetry.findByIdAndUpdate(
+      req.params.id, updates, { new: true, runValidators: true }
     ).select('-driveFileId -driveThumbnailFileId');
 
-    if (!poetry) {
-      return res.status(404).json({ success: false, message: 'Poetry not found' });
+    if (oldMediaId && (updates.driveFileId === null || newMediaId)) {
+      await deleteFileFromDrive(oldMediaId).catch((err) =>
+        console.warn('Drive delete warning (replaced media):', err.message)
+      );
+    }
+    if (oldThumbnailId && newThumbnailId) {
+      await deleteFileFromDrive(oldThumbnailId).catch((err) =>
+        console.warn('Drive delete warning (replaced thumbnail):', err.message)
+      );
     }
 
     // Invalidate caches
     await deleteCached(
-      getCacheKey(`poetry:detail:${poetry._id}`),
-      getCacheKey(`poetry:detail:${poetry.slug}`)
+      getCacheKey(`poetry:detail:${updatedPoetry._id}`),
+      getCacheKey(`poetry:detail:${updatedPoetry.slug}`),
+      getCacheKey(`poetry:detail:${oldSlug}`)
     );
     await deleteCachedPattern(getCacheKey('poetry:list:*'));
 
-    res.json({ success: true, message: 'Poetry updated', data: poetry });
+    res.json({ success: true, message: 'Poetry updated', data: updatedPoetry });
   } catch (error) {
     console.error('updatePoetry error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -381,6 +513,8 @@ const likePoetry = async (req, res) => {
 
 module.exports = {
   createPoetry,
+  getAdminPoetrys,
+  getAdminPoetryById,
   getAllPoetrys,
   getPoetryById,
   streamFile,

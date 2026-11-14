@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { v4: uuidv4 } = require('uuid');
 
 const poetrySchema = new mongoose.Schema(
   {
@@ -110,6 +111,10 @@ poetrySchema.pre('save', async function (next) {
       .replace(/\s+/g, '-')
       .replace(/-+/g, '-')
       .trim();
+
+    // Hindi/Urdu titles may not contain Latin characters; ensure every entry
+    // still gets a usable, unique URL slug.
+    if (!baseSlug) baseSlug = `poem-${uuidv4().slice(0, 8)}`;
 
     // Ensure uniqueness
     let slug = baseSlug;

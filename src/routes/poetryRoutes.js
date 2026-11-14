@@ -4,6 +4,8 @@ const adminAuth = require('../middleware/adminAuth');
 const { uploadPoetryFiles, validateFileSizes } = require('../middleware/upload');
 const {
   createPoetry,
+  getAdminPoetrys,
+  getAdminPoetryById,
   getAllPoetrys,
   getPoetryById,
   streamFile,
@@ -13,6 +15,8 @@ const {
 } = require('../controllers/poetryController');
 
 // ── Public routes ─────────────────────────────────────────────────────────
+router.get('/admin', adminAuth, getAdminPoetrys);
+router.get('/admin/:id', adminAuth, getAdminPoetryById);
 router.get('/', getAllPoetrys);
 router.get('/:idOrSlug', getPoetryById);
 router.post('/:id/like', likePoetry);
