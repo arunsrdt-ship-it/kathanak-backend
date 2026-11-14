@@ -35,8 +35,8 @@ app.use(
       }
     },
     credentials: true,
-    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Admin-Key', 'Range'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Content-Range', 'Authorization', 'X-Admin-Key', 'X-Upload-Token', 'Range'],
     exposedHeaders: ['Content-Range', 'Accept-Ranges', 'Content-Length'],
   })
 );
